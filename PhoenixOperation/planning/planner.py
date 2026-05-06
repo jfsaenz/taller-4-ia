@@ -396,7 +396,9 @@ def aStarPlanner(
     """
     ### Your code here ###
     # -----------------------------------------------------------------------
-    # Primera versión
+    # Registro de uso de IA - aStarPlanner
+    #
+    # Primera versión tentativa:
     #
     # frontier = PriorityQueue()
     # frontier.push(problem.getStartState(), 0)
@@ -408,16 +410,24 @@ def aStarPlanner(
     #
     # return []
     #
-    # Problema detectado en la primera versión:
-    # Esta versión metía estados en la PriorityQueue, pero no guardaba el plan
-    # que llevaba hasta cada estado ni el costo acumulado g(n). Además, si
-    # encontraba el objetivo retornaba una lista vacía, aunque el plan tuviera
-    # acciones. También faltaba combinar g(n) con la heurística h(n).
+    # Problema que encontré:
+    # Esta versión solo metía estados en la cola de prioridad, pero no guardaba
+    # el plan que llevaba hasta cada estado. Tampoco guardaba el costo acumulado
+    # y si encontraba el objetivo devolvía una lista vacía, aunque sí hubiera un
+    # plan. Además, la heurística se podía recalcular muchas veces para estados
+    # repetidos.
     #
     # Prompt utilizado:
-    # "Tengo esta idea de A*, pero no sé cómo guardar al mismo tiempo el estado,
-    # el plan y el costo acumulado tambien me confunde dónde se suma la
-    # heurística me puedes ayudar a armarlo usando PriorityQueue"
+    # "Tengo A* funcionando en tinyBase, pero cuando uso heurísticas en mapas
+    # medianos se demora mucho, no sé si estoy recalculando demasiado la
+    # heurística, tampoco estoy seguro de cómo guardar el estado, el plan y el
+    # costo al mismo tiempo, me ayudas a revisarlo"
+    #
+    # Después de revisar:
+    # Cada elemento de la frontera guarda el estado actual, el plan y el costo
+    # acumulado. La prioridad se calcula con g + h. También se guarda el mejor
+    # costo encontrado para cada estado y se usa h_cache para no recalcular la
+    # heurística si el mismo estado vuelve a aparecer.
     # -----------------------------------------------------------------------
 
     start_state = problem.getStartState()
@@ -426,23 +436,24 @@ def aStarPlanner(
         return []
 
     frontier = PriorityQueue()
-
-    start_h = heuristic(
-        start_state,
-        problem.goal,
-        problem.domain,
-        problem.objects,
-    )
-
-    frontier.push((start_state, [], 0), start_h)
-
     best_g_cost: dict[State, int] = {start_state: 0}
+    h_cache: dict[State, float] = {}
+
+    def h(state: State) -> float:
+        if state not in h_cache:
+            h_cache[state] = heuristic(
+                state,
+                problem.goal,
+                problem.domain,
+                problem.objects,
+            )
+        return h_cache[state]
+
+    frontier.push((start_state, [], 0), h(start_state))
 
     while not frontier.isEmpty():
         current_state, current_plan, current_cost = frontier.pop()
 
-        # Si ya conocemos una ruta mejor hacia este estado, esta entrada de la
-        # cola quedó vieja y no vale la pena expandirla.
         if current_cost > best_g_cost.get(current_state, float("inf")):
             continue
 
@@ -455,22 +466,14 @@ def aStarPlanner(
             if new_cost >= best_g_cost.get(next_state, float("inf")):
                 continue
 
-            new_plan = current_plan + [action]
             best_g_cost[next_state] = new_cost
+            new_plan = current_plan + [action]
+            priority = new_cost + h(next_state)
 
-            h_value = heuristic(
-                next_state,
-                problem.goal,
-                problem.domain,
-                problem.objects,
-            )
-
-            priority = new_cost + h_value
             frontier.push((next_state, new_plan, new_cost), priority)
 
     return []
     ### End of your code ###
-
 
 # Aliases used by the command-line argument parser
 tinyBaseSearch = tinyBaseSearch

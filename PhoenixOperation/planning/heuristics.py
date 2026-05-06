@@ -3,6 +3,25 @@ from __future__ import annotations
 from planning.pddl import ActionSchema, State, Objects, get_all_groundings
 
 
+_GROUNDINGS_CACHE = {}
+
+
+def _cached_groundings(
+    domain: list[ActionSchema],
+    objects: Objects,
+):
+    """
+    Guarda las acciones aterrizadas para no volver a generarlas cada vez que
+    se llama una heurística.
+    """
+    key = (id(domain), id(objects))
+
+    if key not in _GROUNDINGS_CACHE:
+        _GROUNDINGS_CACHE[key] = get_all_groundings(domain, objects)
+
+    return _GROUNDINGS_CACHE[key]
+
+
 def nullHeuristic(
     state: State,
     goal: State,
@@ -50,7 +69,7 @@ def ignorePreconditionsHeuristic(
     if not unsatisfied:
         return 0
 
-    ground_actions = get_all_groundings(domain, objects)
+    ground_actions = _cached_groundings(domain, objects)
     cost = 0
 
     while unsatisfied:
@@ -87,87 +106,72 @@ def ignoreDeleteListsHeuristic(
     Estimate the plan cost by solving a relaxed problem where no action
     has a delete list (effects never remove fluents from the state).
 
-    In this monotone relaxation, the state only grows over time (fluents are
-    never removed), so hill-climbing always makes progress and cannot loop.
-
-    Algorithm (hill-climbing on the relaxed problem):
-      1. Start from the current state with a relaxed (monotone) apply function.
-      2. At each step, pick the grounded action that adds the most unsatisfied
-         goal fluents (greedy hill-climbing).
-      3. Count steps until all goal fluents are satisfied (or until no progress).
-
-    Tip: In the relaxed problem, apply_action never removes fluents.
-         You can implement this by treating del_list as empty for all actions.
-         Use get_applicable_actions to enumerate applicable grounded actions at
-         each step (preconditions still apply in the relaxed model).
+    In this monotone relaxation, the state only grows over time.
     """
     ### Your code here ###
     # -----------------------------------------------------------------------
-    # 
+    # Registro de uso de IA - ignoreDeleteListsHeuristic
     #
-    # Primera versión:
+    # Primera versión tentativa:
     #
     # current_state = set(state)
     # steps = 0
     #
     # while not goal.issubset(current_state):
-    #     for action in _all_ground_actions(domain, objects):
-    #         current_state = current_state | set(action["add_list"])
-    #         steps += 1
+    #     for action in get_all_groundings(domain, objects):
+    #         if action.precond_pos.issubset(current_state):
+    #             current_state = current_state | set(action.add_list)
+    #             steps += 1
     #
     # return steps
     #
-    # Problema detectado en la primera versión:
-    # Esta primera idea estaba incompleta porque aplicaba acciones sin revisar
-    # si sus precondiciones se cumplían. Eso se parece más a ignorar
-    # precondiciones, pero esta heurística no debe hacer eso. En ignore-delete,
-    # las precondiciones siguen importando; lo único que se ignora es la lista
-    # de borrado. Además, la versión inicial aplicaba acciones sin escoger la
-    # mejor y podía contar pasos innecesarios.
+    # Problema que encontré:
+    # Esta idea funcionaba en mapas pequeños, pero en mapas medianos se quedaba
+    # muy lenta. El problema era que A* llama muchas veces la heurística y en
+    # cada llamada se volvían a revisar muchas acciones. Además, contar una
+    # acción por vez hacía que el cálculo avanzara muy despacio.
     #
     # Prompt utilizado:
-    # "Tengo esta primera versión de ignoreDeleteListsHeuristic, pero creo que
-    # estoy confundiendo ignorar delete lists con ignorar precondiciones,no se
-    # bien cómo hacer para que las acciones sigan necesitando precondiciones,
-    # pero que al aplicarlas no se borre nada me ayudas a corregirla?"
+    # "La heurística ignoreDeleteLists me funciona en tinyBase, pero en
+    # mediumRescue y warehouseRescue se queda pegada, creo que estoy haciendo
+    # el cálculo muy pesado, no entiendo cómo hacerla más rápida sin cambiar
+    # la idea de ignorar las delete lists, me ayudas a revisarla"
     #
+    # Después de revisar:
+    # Dejé una versión por niveles. En cada nivel se revisan las acciones que
+    # sí cumplen sus precondiciones, se agregan sus efectos positivos y no se
+    # borra ningún fluente. También se usa caché para no generar otra vez todas
+    # las acciones aterrizadas en cada llamada.
     # -----------------------------------------------------------------------
 
     current_state = set(state)
     goal_set = set(goal)
-    steps = 0
 
     if goal_set.issubset(current_state):
         return 0
 
-    ground_actions = get_all_groundings(domain, objects)
+    ground_actions = _cached_groundings(domain, objects)
+    levels = 0
 
     while not goal_set.issubset(current_state):
-        unsatisfied = goal_set - current_state
-        best_action = None
-        best_progress = set()
+        new_fluents = set()
 
         for action in ground_actions:
-            precond_pos = set(action.precond_pos)
-            precond_neg = set(action.precond_neg)
+            positive_ok = action.precond_pos.issubset(current_state)
+            negative_ok = action.precond_neg.isdisjoint(current_state)
 
-            positive_ok = precond_pos.issubset(current_state)
-            negative_ok = precond_neg.isdisjoint(current_state)
+            if positive_ok and negative_ok:
+                new_fluents |= set(action.add_list)
 
-            if not positive_ok or not negative_ok:
-                continue
+        before_size = len(current_state)
+        current_state |= new_fluents
+        levels += 1
 
-            progress = set(action.add_list) & unsatisfied
-
-            if len(progress) > len(best_progress):
-                best_action = action
-                best_progress = progress
-
-        if best_action is None or not best_progress:
+        if len(current_state) == before_size:
             return float("inf")
 
-        current_state |= set(best_action.add_list)
-        steps += 1
+        if levels > 100:
+            return float("inf")
 
-    return steps
+    return levels
     ### End of your code ###
